@@ -13,11 +13,36 @@ from plotly.subplots import make_subplots
 import tempfile
 import os
 import sys
+import subprocess
 
 # Add the current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from cigale_interface import CigaleRunner, FILTER_SETS, MODULE_CATEGORIES, run_simple_sed
+# Check if CIGALE is installed, if not, show warning
+CIGALE_AVAILABLE = False
+try:
+    import pcigale
+    CIGALE_AVAILABLE = True
+except ImportError:
+    st.warning("⚠️ CIGALE not installed. SED fitting functionality will be disabled.")
+    st.info("To enable full functionality, please install CIGALE from https://cigale.lam.fr")
+
+if CIGALE_AVAILABLE:
+    from cigale_interface import CigaleRunner, FILTER_SETS, MODULE_CATEGORIES, run_simple_sed
+else:
+    # Define dummy values for when CIGALE is not available
+    FILTER_SETS = {
+        "SDSS": ["sdss.u", "sdss.g", "sdss.r", "sdss.i", "sdss.z"],
+        "GALEX": ["galex.FUV", "galex.NUV"],
+        "2MASS": ["2mass.J", "2mass.H", "2mass.Ks"],
+        "WISE": ["wise.W1", "wise.W2", "wise.W3", "wise.W4"],
+    }
+    MODULE_CATEGORIES = {
+        "SFH": ["sfhdelayed"],
+        "SSP": ["bc03"],
+    }
+    CigaleRunner = None
+    run_simple_sed = None
 
 # Page configuration
 st.set_page_config(
@@ -395,7 +420,10 @@ with run_col2:
     cores = st.slider("CPU 核心数", 1, 8, 4, 1)
 
 if run_button:
-    if len(edited_df) == 0:
+    if not CIGALE_AVAILABLE:
+        st.error("❌ CIGALE 未安装。请在本地运行此应用，或联系管理员安装 CIGALE。")
+        st.info("安装指南: https://cigale.lam.fr")
+    elif len(edited_df) == 0:
         st.error("❌ 请先添加光度数据")
     else:
         with st.spinner("正在运行 CIGALE，请稍候..."):

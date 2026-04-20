@@ -3,4 +3,6 @@ plotly>=5.0.0
 numpy>=1.24.0,<2.0
 pandas>=2.0.0
 astropy>=5.0
-pcigale
+scipy>=1.10.0
+matplotlib>=3.5.0
+configobj>=5.0.0

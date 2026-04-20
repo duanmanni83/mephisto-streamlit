@@ -82,6 +82,7 @@ class CigaleRunner:
     ) -> str:
         """
         Create pcigale.ini configuration file.
+        Uses pcigale init to create proper template first, then customizes it.
 
         Args:
             sed_modules: List of SED module names in order
@@ -95,45 +96,79 @@ class CigaleRunner:
         if module_params is None:
             module_params = {}
 
-        config_lines = [
-            f"data_file = {self.data_file}",
-            f"parameters_file = ",
-            f"sed_modules = {', '.join(sed_modules)}",
-            f"analysis_method = {analysis_method}",
-            f"cores = {cores}",
-            "",
-            "[sed_modules_params]",
-            ""
-        ]
+        # First, run pcigale init to create proper template
+        try:
+            result = subprocess.run(
+                ["pcigale", "init"],
+                cwd=self.work_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode != 0:
+                print(f"pcigale init warning: {result.stderr}")
+        except Exception as e:
+            print(f"pcigale init error: {e}")
 
-        # Add module-specific parameters
-        for module in sed_modules:
-            config_lines.append(f"  [[{module}]]")
-            if module in module_params:
-                for param, value in module_params[module].items():
-                    config_lines.append(f"    {param} = {value}")
-            else:
-                # Add default parameters
-                defaults = self._get_default_params(module)
-                for param, value in defaults.items():
-                    config_lines.append(f"    {param} = {value}")
-            config_lines.append("")
+        # Read the generated template
+        with open(self.config_file, 'r') as f:
+            config_content = f.read()
 
-        # Add analysis parameters
-        config_lines.extend([
-            "",
-            "[analysis_params]",
-            "  variables = ",
-            "  save_sed = True",
-            "  blocks = 1"
-        ])
+        # Replace key values
+        config_content = config_content.replace(
+            "data_file = ",
+            f"data_file = {self.data_file}"
+        )
+        config_content = config_content.replace(
+            f"sed_modules = ,",
+            f"sed_modules = {', '.join(sed_modules)}"
+        )
+        config_content = config_content.replace(
+            f"analysis_method = ",
+            f"analysis_method = {analysis_method}"
+        )
+        config_content = config_content.replace(
+            f"cores = 8",
+            f"cores = {cores}"
+        )
 
-        config_content = "\n".join(config_lines)
+        # Write back
+        with open(self.config_file, 'w') as f:
+            f.write(config_content)
+
+        # Store module params for later use (after genconf)
+        self.module_params = module_params
+
+        return self.config_file
+
+    def update_module_params(self) -> bool:
+        """Update module parameters in the generated config file.
+
+        This should be called after genconf to customize parameters.
+
+        Returns:
+            True if successful
+        """
+        if not hasattr(self, 'module_params') or not self.module_params:
+            return True
+
+        with open(self.config_file, 'r') as f:
+            config_content = f.read()
+
+        # Update parameters for each module
+        for module, params in self.module_params.items():
+            for param, value in params.items():
+                # Find and replace the parameter value
+                # Match pattern like "param = value" in the module section
+                import re
+                pattern = rf"(\[\[{module}\]\][\s\S]*?{param} = )[^\n]+"
+                replacement = rf"\g<1>{value}"
+                config_content = re.sub(pattern, replacement, config_content)
 
         with open(self.config_file, 'w') as f:
             f.write(config_content)
 
-        return self.config_file
+        return True
 
     def _get_default_params(self, module: str) -> Dict[str, Any]:
         """Get default parameters for a given module."""
@@ -247,8 +282,12 @@ class CigaleRunner:
 
         return defaults.get(module, {})
 
-    def generate_config(self) -> bool:
-        """Generate full configuration using pcigale genconf."""
+    def generate_config(self) -> Tuple[bool, str]:
+        """Generate full configuration using pcigale genconf.
+
+        Returns:
+            Tuple of (success, error_message)
+        """
         try:
             result = subprocess.run(
                 ["pcigale", "genconf"],
@@ -257,10 +296,14 @@ class CigaleRunner:
                 text=True,
                 timeout=60
             )
-            return result.returncode == 0
+            if result.returncode != 0:
+                error_msg = result.stderr if result.stderr else "Unknown error during genconf"
+                return False, error_msg
+            return True, ""
         except Exception as e:
-            print(f"Error generating config: {e}")
-            return False
+            error_msg = f"Error generating config: {str(e)}"
+            print(error_msg)
+            return False, error_msg
 
     def run(self) -> Tuple[bool, str]:
         """
@@ -271,8 +314,12 @@ class CigaleRunner:
         """
         try:
             # Generate full configuration
-            if not self.generate_config():
-                return False, "Failed to generate configuration"
+            genconf_success, genconf_error = self.generate_config()
+            if not genconf_success:
+                return False, f"Failed to generate configuration: {genconf_error}"
+
+            # Update module parameters after genconf
+            self.update_module_params()
 
             # Run CIGALE
             result = subprocess.run(
@@ -286,7 +333,8 @@ class CigaleRunner:
             if result.returncode == 0:
                 return True, "CIGALE completed successfully"
             else:
-                return False, f"CIGALE failed: {result.stderr}"
+                error_detail = result.stderr if result.stderr else "Unknown error"
+                return False, f"CIGALE failed: {error_detail}"
 
         except subprocess.TimeoutExpired:
             return False, "CIGALE timed out after 5 minutes"
